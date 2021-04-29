@@ -1,0 +1,193 @@
+%% LyX 2.2.4 created this file.  For more info, see http://www.lyx.org/.
+%% Do not edit unless you really know what you are doing.
+\documentclass[12pt, a4paper]{article}
+\usepackage{geometry}
+\geometry{verbose,tmargin=2cm,bmargin=2cm,lmargin=3cm,rmargin=3cm}
+\usepackage{float}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{graphicx}
+\PassOptionsToPackage{normalem}{ulem}
+\usepackage{ulem}
+\usepackage{url}
+\usepackage{hyperref}
+
+\makeatletter
+\usepackage{colortbl}
+\date{}
+
+\@ifundefined{showcaptionsetup}{}{%
+ \PassOptionsToPackage{caption=false}{subfig}}
+\usepackage{subfig}
+\makeatother
+
+\begin{document}
+
+\title{\Large 16-833: Robot Localization and Mapping, Spring 2021\\
+\textbf{\Large Homework 3 - Linear and Nonlinear\\ SLAM Solvers}}
+\maketitle
+\begin{flushright}
+\textbf{\uline{Due: Wednesday April 7, 11:59pm, 2021}}
+\par\end{flushright}
+
+\def \ans{0} %0: hide, 1: show
+
+Your homework should be submitted as a\textbf{ typeset PDF file} along
+with a\textbf{ }folder\textbf{ }including\textbf{ code} \textbf{only
+(no data)}. The PDF must be submitted on \textbf{Gradescope}, and
+code submitted on \textbf{Canvas}. If you have questions, post them
+on Piazza or come to office hours. Please do not post solutions or
+codes on Piazza. This homework must be done \textbf{individually},
+and plagiarism will be taken seriously. You are free to discuss and
+troubleshoot with others, but the code and writeup must be your own.
+Note that you should list the name and Andrew ID of each student you
+have discussed with on the first page of your PDF file.
+
+\global\long\def\argmin{\operatornamewithlimits{arg\, min}}
+\global\long\def\argmax{\operatornamewithlimits{arg\, max}}
+
+\section{2D Linear SLAM}
+
+In this problem you will implement your own 2D linear SLAM solver
+in \textbf{$\mathtt{linear.py}$}. Data are provided in \textbf{$\mathtt{2d\_linear.npz}, ~\mathtt{2d\_linear\_loop.npz}$} with loaders. Everything you need to
+know to complete this problem was covered in class, so please refer to your
+notes and lecture slides for guidance.
+
+We will be using the least squares formulation of the SLAM problem,
+which was presented in class:
+
+\begin{eqnarray}
+x^{*} & = & \argmin_{x}\Sigma\left\Vert h_{i}\left(x\right)-z_{i}\right\Vert _{\mathbf{\Sigma}_{i}}^{2}\nonumber \\
+ &  & \vdots \label{eq:linear}\\
+ & \approx & \argmin_{x}\left\Vert \mathbf{A}x-b\right\Vert ^{2}\nonumber,
+\end{eqnarray}
+where $z_{i}$ is the $i$-th measurement, $h_{i}\left(x\right)$
+is the corresponding prediction function, and $\left\Vert a\right\Vert _{\mathbf{\Sigma}}^{2}$
+denotes the squared Mahalanobis distance: $a^{T}\boldsymbol{\Sigma}^{-1}a$. 
+
+In this problem, the state vector $x$ is comprised of the trajectory of
+robot positions and the landmark positions. Both positions
+are simply $(x,y)$ coordinates. For a sanity check, we visualize the ground truth trajectory and landmarks in the beginning.
+
+There are two types of measurements:
+odometry and landmark measurements. Odometry measurements give a relative
+$(\Delta x,\Delta y)$ displacement from the previous position to
+the next position (in global frame). Landmark measurements also give
+a relative displacement $(\Delta x,\Delta y)$ from the robot position
+to the landmark (also in global frame).
+
+\subsection{Measurement function (10 points)}
+Given robot poses $\mathbf{r}^t = [r_x^t, r_y^t]^\top$ and $\mathbf{r}^{t+1} = [r_x^{t+1}, r_y^{t+1}]^\top$ at time $t$ and $t+1$ , write out the measurement function and its Jacobian. (5 points)
+\begin{align*}
+h_o(\mathbf{r}^t,~ \mathbf{r}^{t+1}):&~ \mathbb{R}^4 \to \mathbb{R}^{2}, \\
+H_o(\mathbf{r}^t,~ \mathbf{r}^{t+1}):&~ \mathbb{R}^4 \to \mathbb{R}^{2\times 4}.
+\end{align*}
+
+Similarly, given the robot pose $\mathbf{r}^t = [r_x^t,~ r_y^t]^\top$ at time $t$ and the $k$-th landmark $\mathbf{l}^{k} = [l_x^{k},~ l_y^{k}]^\top$. (5 points)
+\begin{align*}
+    h_l(\mathbf{r}^t, \mathbf{l}^{k}):&~ \mathbb{R}^4 \to \mathbb{R}^{2}, \\
+    H_l(\mathbf{r}^t, \mathbf{l}^{k}):&~ \mathbb{R}^4 \to \mathbb{R}^{2\times 4}.
+\end{align*}
+    
+\subsection{Build a linear system (15 points)}
+Use the derivation above, please complete the function \textbf{$\mathtt{create\_linear\_system}$} 
+to construct the linear system as described in Eq.~\ref{eq:linear}. (15 points)
+
+\begin{itemize}
+\item Note in this setup, you will be filling the blocks in the large linear system that is aimed at batch optimizing the large state vector stacking all the robot and landmark positions. Please carefully select indices for both measurements and states when you fill in Jacobians. 
+\item Use $\mathtt{int}$ to convert $\mathtt{observation[:, 0]}$ and $\mathtt{obsevation[:, 1]}$ into pose and landmark indices respectively.
+\item In addition, you will have to add a prior to the first robot pose, otherwise the system will be underconstrained and the state will be subject to an arbitrary global transformation.
+\item Please refer to the function document for detailed instructions.
+\end{itemize}
+
+\subsection{Solvers (20 points)}
+Given the data and the linear system, you are now ready to solve the 2D linear SLAM problem. You are required to implement 5 solvers to solve $Ax = b$ where $A$ is a sparse non-square matrix.
+
+\begin{enumerate}
+ \item $\mathtt{pinv}$: Use pseudo inverse to solve the system. You may only use \\ $\mathtt{scipy.sparse.linalg.inv}$ and matrix multiplication in this function. Return $x$ and a placeholder None. (5 
+ points)
+ \item $\mathtt{lu}$: Use LU factorization (Cholesky is one variant of LU) to solve the system. You may use $\mathtt{scipy.sparse.linalg.splu}$ to factorize the relevant matrices, and use the resulting $\mathtt{SuperLU}$'s $\mathtt{solve}$ method to obtain the final result. Specify ordering $\mathtt{permc\_spec}$ with $\mathtt{NATURAL}$ in $\mathtt{splu}$. Return both $x$ and $U$. (5 points)
+ \item $\mathtt{qr}$: Use QR factorization to solve the system. You may use $\mathtt{sparseqr.rz}$ to obtain $\mathtt{z, R, E, rank}$ from $A, b$, where $R, z$ are the factors used for efficiently solving $||Ax - b||^2 = ||Rx - z||^2 + ||e||^2$ (for details please check the lecture note \textit{Sparse Least Squares}).
+ You may then use $\mathtt{scipy.sparse.linalg.spsolve\_triangular}$ to get the solution. Specify ordering $\mathtt{permc\_spec}$ with $\mathtt{NATURAL}$ in $\mathtt{rz}$. You may NOT directly use $\mathtt{sparseqr.solve}$. Return both $x$ and $R$. (10 points)
+\end{enumerate}
+
+We provide you with a default solver for sanity check. After obtaining the state vector $x$, You may decode the state to trajectory and landmarks, and visualize your results using functions $\mathtt{devectorize\_state}$ and $\mathtt{plot\_traj\_and\_landmarks}$. Check if they match the ground truth before you proceed to the next step. 
+
+\subsection{Exploit sparsity (30 points + 10 points)}
+Now we want to exploit sparsity in the linear system in QR and LU factorizations. 
+\begin{enumerate}
+    \item $\mathtt{lu\_cholmod}$. Change the ordering from the default $\mathtt{NATURAL}$ to $\mathtt{COLAMD}$ (Column approximate minimum degree permutation) and return $x$, $U$. (5 points)
+    \item (Bonus) Instead of LU's built-in solver, write your own forward/backward substitution to compute $x$. Note because of reordering (permutation), you need to manipulate both rows and columns. Please check \href{https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.SuperLU.html#scipy.sparse.linalg.SuperLU}{online documents} for more details. (10 points)
+    \item $\mathtt{qr\_cholmod}$. Change the ordering from the default $\mathtt{NATURAL}$ to $\mathtt{COLAMD}$ (Column approximate minimum degree permutation) and return $x$, $R$. Note now you have to use $E$ from $\mathtt{sparseqr.rz}$. \\$\mathtt{sparseqr.permutation\_vector\_to\_matrix}$ can be useful for permutation. (5 points)
+    \item Now proceed with $\mathtt{2d\_linear.npz}$, visualize the trajectory and landmarks, and report the efficiency of your method in terms of run time. Attach the visualization and analysis of corresponding factor for $\mathtt{qr, qr\_colamd, lu, lu\_colamd}$. What are your observations and their potential reasons (general comparison between QR, LU, and their reordered version)? (10 points)
+    \item Similarly, process $\mathtt{2d\_linear\_loop.npz}$. Are there differences in efficiency comparing to $\mathtt{2d\_linear.npz}$? Write down your observations and reasoning. (10 points)
+\end{enumerate}
+
+
+\section{2D Nonlinear SLAM}
+
+Now you are going to extend the linear SLAM to a nonlinear version in \textbf{$\mathtt{nonlinear.py}$}.
+
+The problem set-up is exactly the same as in the linear problem, except
+we introduce a nonlinear measurement function that returns a bearing
+angle $\theta$ and range $d$ (in robot's body frame, notice
+we assume that this robot always perfectly facing the $x$-direction
+of the global frame), which together describe the vector from the
+robot to the landmark:
+
+\begin{alignat}{2}
+h_{l}\left(\mathbf{r}^t, \mathbf{l}^{k}\right) & = &  & \left[\begin{array}{c}
+\mathrm{atan2}\left(l_{y}^k-r_{y}^t,l_{x}^k-r_{x}^t\right)\\
+\left(\left(l_{x}^k-r_{x}^t\right)^{2}+\left(l_{y}^k-r_{y}^t\right)^{2}\right)^{\frac{1}{2}}
+\end{array}\right]=\left[\begin{array}{c}
+\theta\\
+d
+\end{array}\right].\label{eq:nonlin_meas}
+\end{alignat}
+
+\subsection{Measurement function (10 points)}
+In your nonlinear algorithm, you'll need to predict measurements
+based on the current state estimate. 
+\begin{enumerate}
+\item Fill in the functions $\mathtt{odometry\_estimation}$, $\mathtt{bearing\_range\_estimation}$
+and \textbf{$\mathtt{meas\_landmark}$} with corresponding measurement
+functions. The odometry measurement function is the same linear function
+we used in the linear SLAM algorithm, while the landmark measurement
+function is the new nonlinear function introduced in Eq. \ref{eq:nonlin_meas}. Please carefully check indices and offsets in the state vector.
+(5 points)
+
+\item Derive the jacobian of the nonlinear landmark function in your
+writeup
+$$
+H_l(\mathbf{r}^t, \mathbf{l}^{k}):~ \mathbb{R}^4 \to \mathbb{R}^{2\times 4},
+$$
+and implement the function\textbf{ $\mathtt{compute\_meas\_obs\_jacobian}$}
+to calculate the jacobian at the provided linearization point. (5
+points)
+\end{enumerate}
+
+\subsection{Build a linear system (15 points)}
+Use the derivation above, implement \textbf{$\mathtt{create\_linear\_system}$}, now in $\mathtt{nonlinear.py}$, to generate the linear system $A$ and $b$ at the current linearization point. (15 points)
+In addition to the notes for the linear case, please remember to 
+\begin{itemize}
+    \item Use the provided initialization of $x$ as the linearization point.
+    \item Error per observation is the \emph{difference} of measurements and estimates because of linearization.
+    \item Use $\mathtt{warp2pi}$ to normalize the difference of angles.
+\end{itemize}
+
+\subsection{Solver (10 points)}
+Process $\mathtt{2d\_nonlinear.npz}$. Select one solver you have implemented, and visualize the trajectory and landmarks before and after optimization. Briefly summarize the differences between the optimization process of the linear and the non-linear SLAM problems. (10 points)
+
+\section{Code Submission}
+Instructions:
+\begin{itemize}
+    \item Use $\mathtt{conda}$ to create an environment and run $\mathtt{./install\_deps.sh}$ to install dependencies. If you encounter failures, please install SuiteSparse to your system (usually already installed), see \href{https://github.com/yig/PySPQR#dependencies}{dependencies for sparseqr}.
+    \item Read documents and source code for the packages ($\mathtt{scipy.sparse.linalg}$ and $\mathtt{sparseqr}$). It is a good exercise to learn to use libraries you are not familiar with.
+    \item Use command line arguments. For instance, you can run\\
+    {\sffamily python~linear.py~../data/2d\_linear.npz~--method~pinv~qr~qr\_colamd~lu~lu\_colamd}
+    \\
+    to check the results of all methods altogether on the $\mathtt{2d\_linear}$ case.
+
+\end{itemize}
+Please upload your code to canvas excluding the $\mathtt{data}$ folder.
+\end{document}

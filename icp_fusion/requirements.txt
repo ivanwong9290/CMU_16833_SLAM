@@ -1,0 +1,4 @@
+numpy
+matplotlib
+open3d
+numpy-quaternion
