@@ -9,4 +9,4 @@ Topics Covered: <br />
 - QR, LU, Cholesky Factorization <br />
 - Column Approximate Minimum Degree Ordering Algorithm (COLAMD) <br />
 - Dense SLAM with Point-Based Fusion <br />
-- Point Cloud Construction Using Iterative Closest Point <br />
+- Point Cloud Construction Using Iterative Closest Point (ICP) <br />
