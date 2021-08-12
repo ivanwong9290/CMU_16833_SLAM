@@ -3,7 +3,7 @@
 <br />
 Topics Covered: <br />
 HW 1: <br/>
-&nbsp - Particle Filter & Probabilistic Robotics <br />
+&nbsp; - Particle Filter & Probabilistic Robotics <br />
 HW 2: <br/>
 &nbsp - SLAM Using Extended Kalman Filter (EKF) <br />
 &nbsp - Mahalanobis Distance <br/>
