@@ -1,5 +1,4 @@
-#
-## Localization using Projective ICP on two different frames <br/>
+# Localization using Projective ICP on two different frames <br/>
 <br/>
 The following pictures show attempts to stitch frame 10 with frame 50 and frame 100 together respectively. <br/>
 ![10_50](https://user-images.githubusercontent.com/71652695/129284615-e3550899-d431-450c-a821-ef3b01dee046.png) <br/>
