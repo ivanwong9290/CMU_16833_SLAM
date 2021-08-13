@@ -5,10 +5,10 @@ Part 1: Initialization <br/>
 &nbsp; - 30 equally separated rays centered about particle orientation (These rays are used to scan the environment to detect interference) <br/>
 &nbsp; - Occupancy threshold = 0.35 (Any value greater than that is considered an obstacle for the robot) <br/>
 Part 2: Motion Model <br/>
-The following is the odometry model used for each particle, the $\alpha$ values represent motion noises <br/>
+The following is the odometry model used for each particle, the α values represent motion noises <br/>
 ![image](https://user-images.githubusercontent.com/71652695/129286254-0979caac-542c-4edd-a430-ffd36e2f30f1.png) <br/>
 Part 3: Ray Casting Sensor Model <br/>
-The following is the sensor model used for each particle, the $z$ values can be conveyed as weight for different ray casting noises  <br/>
+The following is the sensor model used for each particle, the z values can be conveyed as weight for different ray casting noises  <br/>
 ![image](https://user-images.githubusercontent.com/71652695/129286435-64de5176-91d9-44f9-ab3f-896b02560426.png) <br/>
 Part 4: Resampling <br/>
 Finally, the following algorithm resamples particles based on the weights assigned in the previous step <br/>
