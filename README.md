@@ -1,7 +1,7 @@
 # CMU_16833_SLAM
 16-833 Robot Localization and Mapping at Carnegie Mellon University <br />
 <br />
-Topics Covered: <br />
+## Topics Covered: <br />
 HW 1: <br/>
 &nbsp; - Particle Filter & Probabilistic Robotics <br />
 HW 2: <br/>
