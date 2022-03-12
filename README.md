@@ -1,5 +1,7 @@
 # CMU_16833_SLAM
 16-833 Robot Localization and Mapping at Carnegie Mellon University <br />
+<br/>
+This is my personal repository for my own future reference, please refer to CMU's academic integrity rules before going through this repository. 
 <br />
 ## Topics Covered: <br />
 HW 1: <br/>
