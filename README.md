@@ -17,5 +17,3 @@ HW 3: <br/>
 HW 4: <br/>
 &nbsp; - Dense SLAM with Point-Based Fusion <br />
 &nbsp; - Point Cloud Construction Using Iterative Closest Point (ICP) <br />
-<br />
-Refer to individual folders for a description of assignment
