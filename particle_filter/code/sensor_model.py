@@ -4,7 +4,6 @@
     Updated by Wei Dong (weidong@andrew.cmu.edu), 2021
 '''
 
-# import cv2
 from tqdm import tqdm
 import numpy as np
 import math
@@ -14,29 +13,12 @@ from scipy.stats import norm
 
 from map_reader import MapReader
 
-
-# variables :
-# LaserReadings = [x, y, theta, xl, yl, thetal, r1......r180]
-#
-# parameters :
-# zHit, zRand, zShort, zMax, sigmaHit, lambdaShort
-# L = 25 , n = laser beam numbers
-
-
-def occupancy(x, resolution, occupancy_map):
-    xMap = int(math.floor(x[0] // resolution))
-    yMap = int(math.floor(x[1] // resolution))
-    return occupancy_map[xMap, yMap]
-
-
-def inBound(x, resolution, mapSize):
-    xMap = math.floor(x[0] // resolution)
-    yMap = math.floor(x[1] // resolution)
-    if (xMap >= 0) and (xMap < mapSize) and (yMap >= 0) and (yMap < mapSize):
-        return True
-    else:
-        return False
-
+# try:
+#     import cupy as cp
+#     use_cupy = True
+#     np = cp
+# except ImportError:
+#     use_cupy = False
 
 class SensorModel:
     """
@@ -44,323 +26,200 @@ class SensorModel:
     [Chapter 6.3]
     """
 
-    def __init__(self, occupancy_map):
+    def __init__(self, occupancy_map: np.ndarray, map_resolution_reduction_factor: int):
         """
         TODO : Tune Sensor Model parameters here
         The original numbers are for reference but HAVE TO be tuned.
         """
-        self._z_hit = 150 # 5
-        self._z_short = 17.5 # 0.5
-        self._z_max = 15 # 0.5
-        self._z_rand = 100 # 200
-        self._sigma_hit = 100
-        self._lambda_short = 15
-        self._min_probability = 0.35
-        self._subsampling = 2
 
-        """ Occupancy map specs """
-        self.OccMap = occupancy_map
-        self.OccMapSize = np.size(occupancy_map)
-        self.resolution = 10
+        # Range measurement error parameters
+        self._z_hit = 150 # Correct range with local measurement noise
+        self._z_short = 17.5 # Unexpected objects
+        self._z_max = 15 # Failure to sense due to max range reached
+        self._z_rand = 100 # Random, unexplainable measurements
 
-        """ Laser specs """
-        self.laserMax = 8183  # Laser max range
-        self.nLaser = 30
-        self.laserX = np.zeros((self.nLaser, 1))
-        self.laserY = np.zeros((self.nLaser, 1))
-        self.beamsRange = np.zeros((self.nLaser, 1))
+        # assert(self._z_hit + self._z_short + self._z_max + self._z_rand == 1)
 
-        # print("OCCUPANCY MAP size : \n", np.shape(self.OccMap))
-        # print("OccMapSize Initialized: ", self.OccMapSize)
+        # Distribution parameters
+        self._sigma_hit = 30
+        self._lambda_short = 0.5
+    
+        # Occupancy map
+        self._occupancy_map = occupancy_map
+        self._mrrf = map_resolution_reduction_factor
 
-    def WrapToPi(self, angle):
-        angle_wrapped = angle - 2 * np.pi * np.floor((angle + np.pi) / (2 * np.pi))
-        return angle_wrapped
+        # Laser parameters
+        self._laser_max_range = 8183
+        self._min_occupancy_probability = 0.35 # p > 0.35 = occupied 
+        self._sensor_offset = 25 # in centimeters
+        self._angle_stride = 2
+        self._laser_stride = 10
 
-    # def WrapAngle(self,angle): # -2pi to 2pi
-    #     if angle >= 2*np.pi:
-    #         angle -=  (angle // (2*np.pi))*2*np.pi
+    def raycast_model(self, x_t1: np.ndarray) -> np.ndarray:
+        """
+            Use the current state of all the particles to map out the ray positions, 
+            introducing strides make calculations faster as they lower the resolution of the model 
 
-    #     elif angle <= -2*np.pi:
-    #         angle +=  (np.abs(angle) // (2*np.pi))*2*np.pi
+            args:
+                x_t1: (M, 3), each row contains (x_m, y_m, theta_m), 
+                    0 <= m <= M, M = num_particles
+            
+            returns:
+                z_star : (M, K), each row contains the laser range value of each particle (m) for each angle (k) swept across 0-180 degrees
+                    0 <= m <= M, M = num_particles
+                    0 <= k <= K, K = 180 / angle_stride 
+        """
+        # if use_cupy:
+        #     x_t1 = cp.asarray(x_t1)
 
-    #     return angle
+        # prep our angle and range space
+        theta_k = np.radians(np.arange(-90, 90, self._angle_stride))
+        laser_r = np.arange(0, self._laser_max_range, self._laser_stride)
 
-    # def ConvTo90(self,angle): # -pi/2 to pi/2
-    #     if angle >= np.pi/2:
-    #         angle -= (angle // (np.pi/2))*np.pi/2
-    #     elif angle <= - np.pi/2:
-    #         angle += (angle // (np.pi/2))*np.pi/2
-    #     return angle
+        # split x, y, theta into individual array 
+        x_m, y_m, theta_m = np.hsplit(x_t1, 3)
 
-    # def getQuad(self,angle):
-    #     if (angle>=0 and angle<np.pi/2) or (angle>=-2*np.pi and angle <-3*np.pi/2):
-    #         quad = 1
-    #     elif (angle>=np.pi/2 and angle <np.pi) or (angle >= -3*np.pi/2 and angle < -np.pi):
-    #         quad = 2
-    #     elif (angle >= 3*np.pi/2 and angle <2*np.pi) or (angle >= -np.pi/2 and angle <0):
-    #         quad = 4
-    #     else:
-    #         quad = 3
-    #     return quad
+        # get all combinations of theta_m, theta_k, laser_r
+        theta_M, theta_K, laser_R = np.meshgrid(theta_m, theta_k, laser_r, indexing="ij")
 
-    # def getProbability_A(self, z_star, z_reading):
-    #     # Hit
-    #     if 0 < z_reading < self.laserMax:
-    #         gauss_norm = self.norm.cdf(self.laserMax, loc=z_star, scale=self._sigma_hit) - self.norm.cdf(0,loc=z_star, scale=self._sigma_hit)
-    #         gauss = self.norm.pdf(z_reading,loc=z_star, scale=self._sigma_hit) / gauss_norm
-    #     else:
-    #         gauss = 0
-    #
-    #     # short
-    #     if 0 < z_reading < z_star:
-    #         exp = self._lambda_short*np.exp(-self._lambda_short*z_reading)
-    #         exp *= 1/(1-np.exp(-self._lambda_short*z_star))
-    #     else:
-    #         exp = 0
-    #
-    #     # Max
-    #     if z_reading >= self.laserMax:
-    #         p_max = 1
-    #     else:
-    #         p_max = 0
-    #
-    #     # random
-    #     if (z_reading > 0 and z_reading < self.laserMax):
-    #         p_rand = 1/self.laserMax
-    #     else:
-    #         p_rand = 0
-    #     p = self._z_hit*gauss + self._z_short*exp + self._z_max*p_max + self._z_rand*p_rand
-    #     p /= (self._z_hit + self._z_short + self._z_max + self._z_rand)
+        # ray cast map indices for all combinations of laser range increments, laser angle increments, and particles are calculated here
+        raycast_x_id = ((laser_R * np.cos(theta_M + theta_K) + self._sensor_offset * np.cos(theta_M) + x_m[:, np.newaxis]) // self._mrrf).astype(int)
+        raycast_y_id = ((laser_R * np.sin(theta_M + theta_K) + self._sensor_offset * np.sin(theta_M) + y_m[:, np.newaxis]) // self._mrrf).astype(int)
 
-    # return p
+        # ensure all indices are in bound of map, wrap out-of-bounds value around x = (0, map_w), y = (0, map_h)
+        map_h, map_w = self._occupancy_map.shape
+        np.clip(raycast_x_id, 0, map_w - 1, out=raycast_x_id)
+        np.clip(raycast_y_id, 0, map_h - 1, out=raycast_y_id)
 
-    def getProbability(self, z_star, z_reading):
-        # hit
-        if 0 <= z_reading <= self.laserMax:
-            pHit = np.exp(-1 / 2 * (z_reading - z_star) ** 2 / (self._sigma_hit ** 2))
-            pHit = pHit / (np.sqrt(2 * np.pi * self._sigma_hit ** 2))
+        # check ray occupancies for each particle and each angle, assign true in its indices if the space it occupied is greater than the minimum
+        # occupied: (M, K, R)
+        occupied = self._occupancy_map[raycast_x_id, raycast_y_id] > self._min_occupancy_probability 
 
-        else:
-            pHit = 0
+        # we need to find out which particle, at each angle, and at which laser range did it first encountered an obstacle,
+        # then transform all indices back into distance (1 index spans 10 cm)
+        z_star = np.argmax(occupied, axis=2) * self._mrrf # size (M, K)
 
-        # short
-        if 0 <= z_reading <= z_star:
-            # eta = 1.0/(1-np.exp(-lambdaShort*z_star))
-            eta = 1
-            pShort = eta * self._lambda_short * np.exp(-self._lambda_short * z_reading)
+        # for each particle and each angle, if no collision is found in that direction, then set the range from 0 to max laser range
+        free_indices = ~np.any(occupied, axis=2) # flip the map so free = True instead of occupied
+        z_star[free_indices] = self._laser_max_range # before, values at free_indices = 0
+        return z_star
 
-        else:
-            pShort = 0
+    def calculate_p_hit(self, z_star: np.ndarray, z_measured: np.ndarray) -> np.ndarray:
+        """
+            Get the probability distribution of the measured range accounting for measurement noise.
 
-        # max
-        if z_reading >= self.laserMax:
-            pMax = self.laserMax
-        else:
-            pMax = 0
+            args:
+                z_star: (M, K), true range measurement from raycasting
+                    0 <= m <= M, M = num_particles
+                    0 <= k <= K, K = 180 / angle_stride 
+                z_measured: (180, 1), measured range measurement
+                    
+            returns:
+                p_hit: (M, K), gaussian distribution of true range measurement for each particle and angle
+        """
+        # downsample to ensure matching array size between true and measured
+        z_measured = z_measured[0::self._angle_stride][:, np.newaxis]
+        assert(z_measured.shape[0] == z_star.shape[1])
 
-        # rand
-        if 0 <= z_reading < self.laserMax:
-            pRand = 1 / self.laserMax
-        else:
-            pRand = 0
+        # pdf calculation
+        dz = z_measured.T - z_star
+        p_hit = norm.pdf(dz, loc=z_star, scale=self._sigma_hit)
 
-        p = self._z_hit * pHit + self._z_short * pShort + self._z_max * pMax + self._z_rand * pRand
-        p /= (self._z_hit + self._z_short + self._z_max + self._z_rand)
-        return p, pHit, pShort, pMax, pRand
+        # normalizer calculation
+        cdf_upper = norm.cdf(self._laser_max_range, loc=z_star, scale=self._sigma_hit)
+        cdf_lower = norm.cdf(0, loc=z_star, scale=self._sigma_hit)
+        n = 1 / (cdf_upper - cdf_lower)
+        
+        # apply normalizer
+        p_hit *= n
 
-    def rayCast(self, x_t1):
+        # mask p_hit if it's not within 0 <= z_measured <= z_max
+        out_of_bounds = (z_measured < 0) | (z_measured > self._laser_max_range)
+        out_of_bounds = np.repeat(out_of_bounds, p_hit.shape[0], axis=1).T
+        p_hit[out_of_bounds] = 0
 
-        '''
-         vectorizing (mask) ---
-        '''
-        # beamsRange = np.zeros(self.nLaser)
-        # laserX = np.zeros(self.nLaser)
-        # laserY = np.zeros(self.nLaser)
-        # angs   = np.zeros(self.nLaser)
-        # L = 25
+        return p_hit
 
-        # xc = x_t1[0]
-        # yc = x_t1[1]
-        # myPhi = x_t1[2]
-        # ang = myPhi - np.pi/2
-        # ang =self.WrapToPi(ang)
-        # offSetX = xc + L* np.cos(ang)
-        # offSetY = yc + L* np.sin(ang)
+    def calculate_p_short(self, z_star: np.ndarray, z_measured: np.ndarray) -> np.ndarray:
+        """
+            Get the probability distribution of the measured range accounting for sensor noise due to unexpected objects (people walking by, etc.).
 
-        # angStep = np.pi/self.nLaser
-        # r = np.linspace(0,self.laserMax,500)
+            args:
+                z_star: (M, K), true range measurement from raycasting
+                    0 <= m <= M, M = num_particles
+                    0 <= k <= K, K = 180 / angle_stride 
+                z_measured: (180, 1), measured range measurement
+                    
+            returns:
+                p_short: (M, K), gaussian distribution of true range measurement for each particle and angle
+        """
+        # downsample to ensure matching array size between true and measured
+        z_measured = z_measured[0::self._angle_stride][:, np.newaxis]
+        assert(z_measured.shape[0] == z_star.shape[1])
 
-        # for i in range(self.nLaser):
+        # pdf calculation
+        p_short = self._lambda_short * np.exp(-self._lambda_short * z_measured)
 
-        #     ang += angStep*i
-        #     ang = self.WrapToPi(ang)
-        #     # casting rays
-        #     x = offSetX + r * np.cos(ang)
-        #     y = offSetY + r * np.sin(ang)
+        # normalizer calculation
+        epsilon = 1e-10 # add a small value to avoid total 0 in denominator
+        n = np.divide(1, 1 - np.exp(-self._lambda_short * z_star) + epsilon)
 
-        #     xInt = np.floor(x/self.resolution).astype(int)
-        #     yInt = np.floor(y/self.resolution).astype(int)
+        # apply normalizer
+        p_short *= n
 
-        #     # mask = np.zeros_like(xInt).astype(bool)
-        #     # mask1= np.zeros_like(xInt).astype(bool)
-        #     # mask1[(xInt < 800) & (xInt>=0) & (yInt>=0) & (yInt < 800)] == True
-        #     # print("x",xInt[mask1].shape,yInt[mask1].shape)
-        #     # print("asdfsaf",self.OccMap[yInt[mask1],xInt[mask1]])
+        # mask p_short if it's not within 0 <= z_measured <= z_star
+        out_of_bounds = (z_measured < 0) | (z_measured > z_star)
+        out_of_bounds = np.repeat(out_of_bounds, p_short.shape[0], axis=1).T
+        p_short[out_of_bounds] = 0
 
-        #     xWithin = np.argwhere(xInt<800)
-        #     yWithin = np.argwhere(yInt<800)
-        #     within = np.intersect1d(xWithin,yWithin)
-        #     hitInd = np.
+        return p_short
 
-        #     ii = 0
-        #     for xx, yy in zip(xInt[mask1], yInt[mask1]):
-        #         if((np.abs(self.OccMap[yInt[xx],xInt[yy]]) > 0.35)):
-        #             idx = ii 
-        #             break
-        #         ii+=1
+    def calculate_p_max(self, z_measured: np.ndarray) -> np.ndarray:
+        """
+            Get the probability distribution of the measured range accounting for missing obstacle due to specular reflections.
+            args: 
+                z_measured: (180, 1), measured range measurement
+                    
+            returns:
+                p_max: (180, 1), uniform distribution of measured range measurement for each particle and angle.
+        """
+        p_max = (z_measured == self._laser_max_range).astype(int)
+        return p_max
 
-        #     idx = np.argwhere(mask1==True)[ii]
-        #     mask[(np.abs(self.OccMap[yInt[mask1],xInt[mask1]]) > 0.35)] == True
-        #     mask[((xInt < 800) & (yInt < 800)) & (np.abs(self.OccMap[yInt,xInt]) > 0.35)] == True
-        #     laserX[idx] = x[idx]
-        #     laserY[idx] = y[idx]
-
-        #     beamsRange = r[idx]
-
-        ''' 
-        normal looping -----
-        '''
-
-        beamsRange = np.zeros(self.nLaser)
-        laserX = np.zeros(self.nLaser)
-        laserY = np.zeros(self.nLaser)
-        angs = np.zeros(self.nLaser)
-        L = 25
-
-        xc = x_t1[0]
-        yc = x_t1[1]
-        myPhi = x_t1[2]
-        ang = myPhi - np.pi / 2
-        ang = self.WrapToPi(ang)
-        offSetX = xc + L * np.cos(ang)
-        offSetY = yc + L * np.sin(ang)
-
-        angStep = np.pi / self.nLaser
-
-        '''
-        set ray step size
-        '''
-        r = np.linspace(0, self.laserMax, 800)
-
-        for i in range(self.nLaser):
-
-            ang += angStep
-            # print(ang*180/np.pi)
-            ang = self.WrapToPi(ang)
-            # print("angle after wrapped: ",ang*180/np.pi)
-            # print("current angle:", ang*180/np.pi)
-            # for idx, rs in enumerate(r):
-            for rs in r:
-
-                x = offSetX + rs * np.cos(ang)
-                y = offSetY + rs * np.sin(ang)
-
-                xInt = np.floor(x / self.resolution).astype(int)
-                yInt = np.floor(y / self.resolution).astype(int)
-
-                if xInt < 800 and yInt < 800 and np.abs(self.OccMap[yInt, xInt]) > 0.35:
-                    beamsRange[i] = rs
-                    phi = np.arctan2((offSetY - yInt), (offSetX - xInt))  # phase
-                    angs[i] = ang
-                    laserX[i] = xInt
-                    laserY[i] = yInt
-                    break
-                    # print(x,",",y)
-        # print(np.abs(angs[0]*180/np.pi-angs[-1]*180/np.pi))
-
-        # print(beamsRange)
-
-        return beamsRange, laserX, laserY
-
-        """ Test Method """
-
-        # L = 25
-        #
-        # ang = np.linspace(x_t1[2] - np.pi / 2, x_t1[2] + np.pi / 2, 180)[:, np.newaxis]
-        # r = np.linspace(0, self.laserMax, 200)[np.newaxis, :]
-        #
-        # x = x_t1[0] + (r + L) * np.cos(ang)
-        # y = x_t1[1] + (r + L) * np.sin(ang)
-        #
-        # xInt = np.floor(x / self.resolution).astype(int)
-        # yInt = np.floor(y / self.resolution).astype(int)
-        #
-        # for i in range(self.nLaser):
-        #     for j in range(r.shape[1]):
-        #         if xInt[i][j] < 800 and yInt[i][j] < 800 and np.abs(self.OccMap[yInt[i][j], xInt[i][j]]) > 0.35:
-        #             self.laserX[i] = xInt[i][j]
-        #             self.laserY[i] = yInt[i][j]
-        #             self.beamsRange[i] = r[0][j]
-        #             break
-        #
-        # return self.beamsRange, self.laserX, self.laserY
+    def calculate_p_rand(self, z_measured: np.ndarray) -> np.ndarray:
+        """
+            Get the probability distribution of the measured range accounting for unexplainable measurements.
+            args: 
+                z_measured: (180, 1), measured range measurement
+                    
+            returns:
+                p_max: (180, 1), uniform distribution of measured range measurement for each particle and angle.
+        """
+        p_rand = np.zeros(len(z_measured))
+        p_rand[np.logical_and(0 < z_measured, z_measured < self._laser_max_range)] = self._laser_max_range
+        
+        return p_rand
 
     def beam_range_finder_model(self, z_t1_arr, x_t1):
-        # print("\n ---------\nBEAM RANGE FINDER MODEL CALLED\n ---------\n")
-
         """
-        param[in] z_t1_arr : laser range readings [array of 180 values] at time t
-        param[in] x_t1 : particle state belief [x, y, theta] at time t [world_frame]
-        param[out] prob_zt1 : likelihood of a range scan zt1 at time t
+            param[in] z_t1_arr : laser range readings [array of 180 values] at time t
+            param[in] x_t1 : particle state belief [x, y, theta] at time t [world_frame]
+            param[out] prob_zt1 : likelihood of a range scan zt1 at time t
+        """
+        """
+            References: Thrun, Sebastian, Wolfram Burgard, and Dieter Fox. Probabilistic robotics. MIT press, 2005.
+            [Chapter 6.3, Table 6.1]
         """
         """
         TODO : Add your code here
         """
-        # q = 1
+        q = np.ones(len(x_t1))
 
-        '''
-        q = 0
-        # zt_star,self.laserX,self.laserY = rayCast(x_t1,resolution,nLaser,self.OccMap)
+        z_t1_star = self.raycast_model(x_t1)
+        p_hit = self._z_hit * self.calculate_p_hit(z_star=z_t1_star, z_measured=z_t1_arr)
+        p_short = self._z_short * self.calculate_p_short(z_star=z_t1_star, z_measured=z_t1_arr)
+        p_max = self._z_max * self.calculate_p_max(z_measured=z_t1_arr)[np.newaxis, :]
+        p_rand = self._z_rand * self.calculate_p_rand(z_measured=z_t1_arr)[np.newaxis, :]
+        p = p_hit + p_short + p_max + p_rand # p: (len(x_t1), 180 / self._angle_stride)
+
         
-        # for i in range(nLaser):
-
-        #     pHit   = pHitFun(z_t1_arr[i],zt_star[i],self._sigma_hit)
-        #     pShort = pShortFun(z_t1_arr[i],zt_star[i],self._lambda_short)
-        #     pMax   = pMaxFun(z_t1_arr[i],self._z_max)
-        #     pRand  = pRandFun(z_t1_arr[i],self._z_max)
-
-        #     p = self._z_hit*pHit + self._z_short*pShort + self._z_max*pMax + self._z_rand*pRand
-        
-        #     q = q*p
-            
-        #     if q==0:
-        #         q = 1e-20
-        # return q
-        '''
-        # q = 1
-        q = 0
-
-        step = int(180 / self.nLaser)
-        z_reading = [z_t1_arr[n] for n in range(0, 180, step)]
-        # print("measure----")
-        # print(z_reading)
-        zt_star, laserX, laserY = self.rayCast(x_t1)
-        # print("my cast----")
-        # print(zt_star)
-        '''
-        # diff = z_reading - zt_star
-        # print("difference = ")
-        # print(diff)
-        '''
-        # print(np.size(z_reading))
-        probs = np.zeros(self.nLaser)
-        for i in range(self.nLaser):
-            probs[i], pHit, pShort, pMax, pRand = self.getProbability(zt_star[i], z_reading[i])
-            q += np.log(probs[i])
-
-        q = self.nLaser / np.abs(q)
-        return q, probs, laserX, laserY
-
-        # prob_zt1 = 1.0
-        # return prob_zt1
