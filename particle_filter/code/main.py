@@ -133,7 +133,7 @@ def run_monte_carlo_localization(args):
     """
     Monte Carlo Localization
     """
-    for time_idx, line in enumerate(sim._sensor_data):
+    for time_idx, line in tqdm(enumerate(sim._sensor_data)):
 
         # Read a single 'line' from the log file (can be either odometry or laser measurement)
         # L : laser scan measurement, O : odometry measurement
@@ -144,80 +144,39 @@ def run_monte_carlo_localization(args):
 
         # odometry reading [x, y, theta] in odometry frame
         odometry_robot = meas_vals[0:3]
-        time_stamp = meas_vals[-1]
-
-        if (meas_type == "L"):
-            # [x, y, theta] coordinates of laser in odometry frame
-            odometry_laser = meas_vals[3:6]
-            # 180 range measurement values from single laser scan
-            ranges = meas_vals[6:-1]
-            res = sensor_model.beam_range_finder_model(z_t1_arr=ranges, x_t1=X_t0)
-            break
-
 
         if first_time_idx:
             u_t0 = odometry_robot
             first_time_idx = False
             continue
 
-    #     u_t1 = odometry_robot
+        if (meas_type == "L"):
+            # 180 range measurement values from single laser scan
+            ranges = meas_vals[6:-1]
 
-    #     # Note: this formulation is intuitive but not vectorized; looping in python is SLOW.
-    #     # Vectorized version will receive a bonus. i.e., the functions take all particles as the input and process them in a vector.
+        u_t1 = odometry_robot
 
-    #     """ MOTION MODEL """
-    #     X_t0 = sim._X_bar[:, 0:3]
-    #     X_t1 = motion_model.update(u_t0=u_t0, u_t1=u_t1, x_t0=X_t0)
+        # Note: this formulation is intuitive but not vectorized; looping in python is SLOW.
+        # Vectorized version will receive a bonus. i.e., the functions take all particles as the input and process them in a vector.
 
-    #     """ SENSOR MODEL """
-    #     if meas_type == "L":
-    #         w_t = sensor_model.beam_range_finder_model(ranges, X_t1)
-    #         X_t1 = np.hstack((X_t1, w_t))
+        """ MOTION MODEL """
+        X_t0 = sim._X_bar[:, 0:3]
+        X_t1 = motion_model.update(u_t0=u_t0, u_t1=u_t1, x_t0=X_t0)
 
-    #     # for m in range(0, num_particles):
-    #     #     """
-    #     #     MOTION MODEL
-    #     #     """
-    #     #     x_t0 = X_bar[m, 0:3]
-    #     #     x_t1 = motion_model.update(u_t0, u_t1, x_t0)
+        if meas_type == "L":
+            """ SENSOR MODEL """
+            w_t = sensor_model.beam_range_finder_model(z_t1_arr=ranges, x_t1=X_t1)
+            X_bar_t1 = np.hstack((X_t1, w_t))
 
-    #     #     xInt = int(x_t1[0]/10.0)
-    #     #     yInt = int(x_t1[1]/10.0)
+            """ RESAMPLING """
+            X_bar_t1 = resampler.low_variance_sampler(X_bar_t1)
 
-    #     #     if occupancy_map[yInt, xInt] == 1.0 :
-    #     #         w_t = 0
-    #     #         probs = 0
-    #     #         X_bar_new[m, :] = np.hstack((x_t1, w_t))
-    #     #         continue
+        u_t0 = u_t1
 
-    #     #     """
-    #     #     SENSOR MODEL
-    #     #     """
-    #     #     if (meas_type == "L"):
-    #     #         z_t = ranges
+        if args.visualize and args.num_particles > 1:
+            visualize_timestep(X_bar_t1, time_idx, args.output)
 
-    #     #         w_t, probs, laserX, laserY = sensor_model.beam_range_finder_model(z_t, x_t1)
-    #     #         X_bar_new[m, :] = np.hstack((x_t1, w_t))
-    #     #         if args.visualize and num_particles == 1:
-    #     #             visualize_timestep(X_bar, time_idx, args.output)
-
-    #     #     else:
-    #     #         X_bar_new[m, :] = np.hstack((x_t1, X_bar[m, 3]))
-
-    #     # X_bar = X_bar_new
-    #     # u_t0 = u_t1
-
-    #     # """
-    #     # RESAMPLING
-    #     # """
-    #     # if (meas_type == "L"):
-    #     #     X_bar = resampler.low_variance_sampler(X_bar)
-        
-    #     # if args.visualize and args.num_particles > 1:
-    #     #     visualize_timestep(X_bar, time_idx, args.output)
-    # # print(X_t0)
-    # print(X_t1)
-    # print("Program time: %s seconds" % (time.time() - start_time))
+    print("Program time: %s seconds" % (time.time() - start_time))
 
 
 if __name__ == '__main__':

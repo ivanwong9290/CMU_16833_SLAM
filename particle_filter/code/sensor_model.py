@@ -33,12 +33,12 @@ class SensorModel:
         """
 
         # Range measurement error parameters
-        self._z_hit = 150 # Correct range with local measurement noise
-        self._z_short = 17.5 # Unexpected objects
-        self._z_max = 15 # Failure to sense due to max range reached
-        self._z_rand = 100 # Random, unexplainable measurements
+        self._z_hit = 0.75 # Correct range with local measurement noise
+        self._z_short = 0.20 # Unexpected objects
+        self._z_max = 0.025 # Failure to sense due to max range reached
+        self._z_rand = 0.025 # Random, unexplainable measurements
 
-        # assert(self._z_hit + self._z_short + self._z_max + self._z_rand == 1)
+        assert(self._z_hit + self._z_short + self._z_max + self._z_rand == 1.0)
 
         # Distribution parameters
         self._sigma_hit = 30
@@ -102,6 +102,7 @@ class SensorModel:
         # for each particle and each angle, if no collision is found in that direction, then set the range from 0 to max laser range
         free_indices = ~np.any(occupied, axis=2) # flip the map so free = True instead of occupied
         z_star[free_indices] = self._laser_max_range # before, values at free_indices = 0
+
         return z_star
 
     def calculate_p_hit(self, z_star: np.ndarray, z_measured: np.ndarray) -> np.ndarray:
@@ -122,22 +123,21 @@ class SensorModel:
         assert(z_measured.shape[0] == z_star.shape[1])
 
         # pdf calculation
-        dz = z_measured.T - z_star
-        p_hit = norm.pdf(dz, loc=z_star, scale=self._sigma_hit)
+        p_hit = norm.pdf(z_measured.T, loc=z_star, scale=self._sigma_hit)
 
         # normalizer calculation
         cdf_upper = norm.cdf(self._laser_max_range, loc=z_star, scale=self._sigma_hit)
         cdf_lower = norm.cdf(0, loc=z_star, scale=self._sigma_hit)
+        assert(np.all(cdf_upper - cdf_lower) != 0)
         n = 1 / (cdf_upper - cdf_lower)
-        
+
         # apply normalizer
-        p_hit *= n
+        p_hit = n * p_hit
 
         # mask p_hit if it's not within 0 <= z_measured <= z_max
-        out_of_bounds = (z_measured < 0) | (z_measured > self._laser_max_range)
+        out_of_bounds = np.logical_or(z_measured < 0, z_measured > self._laser_max_range)
         out_of_bounds = np.repeat(out_of_bounds, p_hit.shape[0], axis=1).T
         p_hit[out_of_bounds] = 0
-
         return p_hit
 
     def calculate_p_short(self, z_star: np.ndarray, z_measured: np.ndarray) -> np.ndarray:
@@ -162,17 +162,15 @@ class SensorModel:
 
         # normalizer calculation
         epsilon = 1e-10 # add a small value to avoid total 0 in denominator
-        n = np.divide(1, 1 - np.exp(-self._lambda_short * z_star) + epsilon)
+        n = np.divide(1, 1 - np.exp(-self._lambda_short * z_star) + epsilon).T
 
         # apply normalizer
-        p_short *= n
+        p_short = n * p_short
 
         # mask p_short if it's not within 0 <= z_measured <= z_star
-        out_of_bounds = (z_measured < 0) | (z_measured > z_star)
-        out_of_bounds = np.repeat(out_of_bounds, p_short.shape[0], axis=1).T
+        out_of_bounds = np.logical_or(z_measured < 0, z_measured > z_star.T)
         p_short[out_of_bounds] = 0
-
-        return p_short
+        return p_short.T
 
     def calculate_p_max(self, z_measured: np.ndarray) -> np.ndarray:
         """
@@ -181,9 +179,11 @@ class SensorModel:
                 z_measured: (180, 1), measured range measurement
                     
             returns:
-                p_max: (180, 1), uniform distribution of measured range measurement for each particle and angle.
+                p_max: (180 / angle_stride, 1), uniform distribution of measured range measurement for each particle and angle.
         """
+        z_measured = z_measured[0::self._angle_stride]
         p_max = (z_measured == self._laser_max_range).astype(int)
+
         return p_max
 
     def calculate_p_rand(self, z_measured: np.ndarray) -> np.ndarray:
@@ -193,11 +193,11 @@ class SensorModel:
                 z_measured: (180, 1), measured range measurement
                     
             returns:
-                p_max: (180, 1), uniform distribution of measured range measurement for each particle and angle.
+                p_max: (180 / angle_stride, 1), uniform distribution of measured range measurement for each particle and angle.
         """
+        z_measured = z_measured[0::self._angle_stride]
         p_rand = np.zeros(len(z_measured))
-        p_rand[np.logical_and(0 < z_measured, z_measured < self._laser_max_range)] = self._laser_max_range
-        
+        p_rand[np.logical_and(0 < z_measured, z_measured < self._laser_max_range)] = 1 / self._laser_max_range
         return p_rand
 
     def beam_range_finder_model(self, z_t1_arr, x_t1):
@@ -214,12 +214,13 @@ class SensorModel:
         TODO : Add your code here
         """
         q = np.ones(len(x_t1))
-
         z_t1_star = self.raycast_model(x_t1)
+        
         p_hit = self._z_hit * self.calculate_p_hit(z_star=z_t1_star, z_measured=z_t1_arr)
         p_short = self._z_short * self.calculate_p_short(z_star=z_t1_star, z_measured=z_t1_arr)
         p_max = self._z_max * self.calculate_p_max(z_measured=z_t1_arr)[np.newaxis, :]
         p_rand = self._z_rand * self.calculate_p_rand(z_measured=z_t1_arr)[np.newaxis, :]
         p = p_hit + p_short + p_max + p_rand # p: (len(x_t1), 180 / self._angle_stride)
 
-        
+        prob_zt1 = q * np.prod(p, axis=1)
+        return prob_zt1[:, np.newaxis]

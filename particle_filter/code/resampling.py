@@ -35,4 +35,19 @@ class Resampling:
         """
         TODO : Add your code here
         """
-        pass
+        M = X_bar.shape[0]
+        r = np.random.uniform(0, 1/M)
+        c = X_bar[0, -1]
+        X_bar_resampled = np.zeros_like(X_bar)
+        
+        i = 0
+        for m in range(M):
+            u = r + m/M
+            while u > c and i < M - 1:
+                i += 1
+                # print(m, i)
+                c += X_bar[i, -1]
+            X_bar_resampled[m] = X_bar[i] 
+        
+        return X_bar_resampled
+
